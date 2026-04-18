@@ -66,19 +66,51 @@ fn parse_move_json(j : Json, ctx : String) -> @model.Move raise NashCliError {
         Some(Array(arr)) => parse_stat_effects_array(arr)
         _ => []
       }
+      let accuracy = match m.get("accuracy") {
+        Some(Number(n, ..)) => n.to_int()
+        _ => 100
+      }
+      let status_effect = match m.get("status_effect") {
+        Some(Object(se)) => parse_status_effect_object(se)
+        _ => None
+      }
       {
         name,
         type_,
         category,
         power,
-        accuracy: 100,
+        accuracy,
         pp: 10,
         learn_method: "",
         priority,
         stat_effects,
+        status_effect,
       }
     }
     _ => raise InvalidJson(ctx + " must be an object")
+  }
+}
+
+///|
+/// Parse `{"kind": "まひ" | "やけど" | ...,"chance": 100}` into a
+/// `(StatusKind, Int)` tuple. Missing or unknown kind yields `None`; a
+/// missing `chance` defaults to 100.
+fn parse_status_effect_object(
+  m : Map[String, Json],
+) -> (@model.StatusKind, Int)? {
+  let kind = match m.get("kind") {
+    Some(String(s)) => @model.status_kind_from_jp(s)
+    _ => None
+  }
+  match kind {
+    None => None
+    Some(k) => {
+      let chance = match m.get("chance") {
+        Some(Number(n, ..)) => n.to_int()
+        _ => 100
+      }
+      Some((k, chance))
+    }
   }
 }
 
@@ -239,6 +271,7 @@ fn parse_combatant_json(
             learn_method: "",
             priority: 0,
             stat_effects: [],
+            status_effect: None,
           })
           for i in 0..<arr.length() {
             out[i] = parse_move_json(
@@ -450,6 +483,20 @@ fn parse_screened_spec(rest : String) -> TeamPayoffModel raise NashCliError {
     None => DP_TURN_LIMIT
   }
   ScreenedSwitchingGame(trials, seed, keep_top, refine_tl)
+}
+
+///|
+/// `SwitchingGame(N)` で N が閾値以上なら `ScreenedSwitchingGame` に自動昇格する。
+/// ユーザーが `screened_switching_game:...` を明示したケースは match されず
+/// そのまま通る。閾値・既定 MC パラメータは `semantics.mbt` の定数に集約。
+fn auto_upgrade_team_model(m : TeamPayoffModel) -> TeamPayoffModel {
+  match m {
+    SwitchingGame(n) if n >= AUTO_SCREEN_TURN_LIMIT =>
+      ScreenedSwitchingGame(
+        AUTO_SCREEN_TRIALS, AUTO_SCREEN_SEED, AUTO_SCREEN_KEEP_TOP, n,
+      )
+    _ => m
+  }
 }
 
 ///|
@@ -666,11 +713,12 @@ pub fn run_select(input_json : String) -> String raise NashCliError {
     Some(String(s)) => parse_format(s)
     _ => Single
   }
-  let team_model = match obj.get("team_payoff_model") {
+  let raw_team_model = match obj.get("team_payoff_model") {
     Some(String(s)) => parse_team_payoff_model(s)
     Some(_) => raise InvalidJson("team_payoff_model must be a string")
     None => SwitchingGame(DP_TURN_LIMIT)
   }
+  let team_model = auto_upgrade_team_model(raw_team_model)
   match (format, team_model) {
     (Double, SwitchingGame(_)) =>
       raise InvalidJson(
