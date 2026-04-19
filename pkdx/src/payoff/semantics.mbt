@@ -12,6 +12,29 @@ pub const DP_TURN_LIMIT : Int = 5
 pub const MC_TURN_LIMIT : Int = 5
 
 ///|
+/// `pkdx select` の auto-screening 閾値。`SwitchingGame(N)` のまま DP が
+/// 走ると 20×20 のマトリクス全セルで 4 ターン以上の先読みが必要になり、
+/// 状態異常実装以降は確率ファンアウト (まひ 12.5% / 命中率 / 状態付与 chance)
+/// により DP 分岐数が倍増するため、この turn_limit 以上で自動的に
+/// `ScreenedSwitchingGame` にフォールバックする。`screened_switching_game:...`
+/// を明示指定したときはこの閾値を無視してユーザー指定をそのまま使う。
+pub const AUTO_SCREEN_TURN_LIMIT : Int = 4
+
+///|
+/// Auto-upgrade 時の既定 MC trials。`.claude/skills/nash/SKILL.md` の
+/// チューニングガイド (1000 trials × 400 セル) と揃える。
+pub const AUTO_SCREEN_TRIALS : Int = 1000
+
+///|
+/// Auto-upgrade 時の既定 MC seed (再現性担保)。
+pub const AUTO_SCREEN_SEED : UInt64 = 42
+
+///|
+/// Auto-upgrade 時の既定 keep_top_quantile。C(6,3)=20 selections で
+/// 6 retained ≒ Nash support を十分カバーする下限。
+pub const AUTO_SCREEN_KEEP_TOP : Double = 0.3
+
+///|
 /// Team-level payoff model for converting Pokemon team matchups into zero-sum
 /// selection matrices.
 ///

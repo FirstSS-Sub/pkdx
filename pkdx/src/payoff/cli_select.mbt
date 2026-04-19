@@ -66,16 +66,49 @@ fn parse_move_json(j : Json, ctx : String) -> @model.Move raise NashCliError {
         Some(Array(arr)) => parse_stat_effects_array(arr)
         _ => []
       }
+      let accuracy = match m.get("accuracy") {
+        Some(Number(n, ..)) => n.to_int()
+        _ => 100
+      }
+      let status_effect = match m.get("status_effect") {
+        Some(Object(se)) => parse_status_effect_object(se)
+        _ => None
+      }
+      let recoil_num = match m.get("recoil_num") {
+        Some(Number(n, ..)) => n.to_int()
+        _ => 0
+      }
+      let recoil_den = match m.get("recoil_den") {
+        Some(Number(n, ..)) => {
+          let v = n.to_int()
+          // Guard against zero denominator upstream; treat as no-recoil.
+          if v <= 0 { 1 } else { v }
+        }
+        _ => 1
+      }
+      let self_ko = match m.get("self_ko") {
+        Some(True) => true
+        _ => false
+      }
+      let recharge = match m.get("recharge") {
+        Some(True) => true
+        _ => false
+      }
       {
         name,
         type_,
         category,
         power,
-        accuracy: 100,
+        accuracy,
         pp: 10,
         learn_method: "",
         priority,
         stat_effects,
+        status_effect,
+        recoil_num,
+        recoil_den,
+        self_ko,
+        recharge,
       }
     }
     _ => raise InvalidJson(ctx + " must be an object")
@@ -83,29 +116,69 @@ fn parse_move_json(j : Json, ctx : String) -> @model.Move raise NashCliError {
 }
 
 ///|
-/// Parse a JSON array of `[stat_index, delta]` pairs. Non-conforming entries
-/// are silently skipped (e.g. wrong arity, non-numeric members); a malformed
-/// JSON that parsed as an Array still yields an empty effect list rather than
-/// raising.
-fn parse_stat_effects_array(arr : Array[Json]) -> Array[(Int, Int)] {
-  let out : Array[(Int, Int)] = []
+/// Parse `{"kind": "まひ" | "やけど" | ...,"chance": 100}` into a
+/// `(StatusKind, Int)` tuple. Missing or unknown kind yields `None`; a
+/// missing `chance` defaults to 100.
+fn parse_status_effect_object(
+  m : Map[String, Json],
+) -> (@model.StatusKind, Int)? {
+  let kind = match m.get("kind") {
+    Some(String(s)) => @model.status_kind_from_jp(s)
+    _ => None
+  }
+  match kind {
+    None => None
+    Some(k) => {
+      let chance = match m.get("chance") {
+        Some(Number(n, ..)) => n.to_int()
+        _ => 100
+      }
+      Some((k, chance))
+    }
+  }
+}
+
+///|
+/// Parse a JSON array of stat-effect entries. Accepts two shapes so existing
+/// `pkdx moves` output keeps working while the new 3-element form flows
+/// through:
+///
+/// - 2-element `[stat, delta]` — legacy; `target` defaults to `0` (self)
+/// - 3-element `[stat, delta, target]` — `target` 0=self, 1=opp
+///
+/// Non-conforming entries (wrong arity, non-numeric members) are silently
+/// skipped; a malformed JSON that still parsed as an Array yields an empty
+/// effect list rather than raising.
+fn parse_stat_effects_array(arr : Array[Json]) -> Array[@model.StatEffect] {
+  let out : Array[@model.StatEffect] = []
   for item in arr {
     match item {
-      Array(pair) =>
-        if pair.length() == 2 {
-          let a = match pair[0] {
+      Array(triple) => {
+        let len = triple.length()
+        if len == 2 || len == 3 {
+          let a = match triple[0] {
             Number(n, ..) => Some(n.to_int())
             _ => None
           }
-          let b = match pair[1] {
+          let b = match triple[1] {
             Number(n, ..) => Some(n.to_int())
             _ => None
+          }
+          let t = if len == 3 {
+            match triple[2] {
+              Number(n, ..) => n.to_int()
+              _ => 0
+            }
+          } else {
+            0
           }
           match (a, b) {
-            (Some(ai), Some(bi)) => out.push((ai, bi))
+            (Some(ai), Some(bi)) =>
+              out.push(@model.StatEffect::{ stat: ai, delta: bi, target: t })
             _ => ()
           }
         }
+      }
       _ => ()
     }
   }
@@ -239,6 +312,11 @@ fn parse_combatant_json(
             learn_method: "",
             priority: 0,
             stat_effects: [],
+            status_effect: None,
+            recoil_num: 0,
+            recoil_den: 1,
+            self_ko: false,
+            recharge: false,
           })
           for i in 0..<arr.length() {
             out[i] = parse_move_json(
@@ -450,6 +528,20 @@ fn parse_screened_spec(rest : String) -> TeamPayoffModel raise NashCliError {
     None => DP_TURN_LIMIT
   }
   ScreenedSwitchingGame(trials, seed, keep_top, refine_tl)
+}
+
+///|
+/// `SwitchingGame(N)` で N が閾値以上なら `ScreenedSwitchingGame` に自動昇格する。
+/// ユーザーが `screened_switching_game:...` を明示したケースは match されず
+/// そのまま通る。閾値・既定 MC パラメータは `semantics.mbt` の定数に集約。
+fn auto_upgrade_team_model(m : TeamPayoffModel) -> TeamPayoffModel {
+  match m {
+    SwitchingGame(n) if n >= AUTO_SCREEN_TURN_LIMIT =>
+      ScreenedSwitchingGame(
+        AUTO_SCREEN_TRIALS, AUTO_SCREEN_SEED, AUTO_SCREEN_KEEP_TOP, n,
+      )
+    _ => m
+  }
 }
 
 ///|
@@ -666,11 +758,12 @@ pub fn run_select(input_json : String) -> String raise NashCliError {
     Some(String(s)) => parse_format(s)
     _ => Single
   }
-  let team_model = match obj.get("team_payoff_model") {
+  let raw_team_model = match obj.get("team_payoff_model") {
     Some(String(s)) => parse_team_payoff_model(s)
     Some(_) => raise InvalidJson("team_payoff_model must be a string")
     None => SwitchingGame(DP_TURN_LIMIT)
   }
+  let team_model = auto_upgrade_team_model(raw_team_model)
   match (format, team_model) {
     (Double, SwitchingGame(_)) =>
       raise InvalidJson(

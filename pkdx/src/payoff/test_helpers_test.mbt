@@ -39,18 +39,29 @@ fn mk_move(
   category : @model.MoveCategory,
   power : Int,
   priority~ : Int = 0,
-  stat_effects~ : Array[(Int, Int)] = [],
+  stat_effects~ : Array[@model.StatEffect] = [],
+  status_effect~ : (@model.StatusKind, Int)? = None,
+  accuracy~ : Int = 100,
+  recoil_num~ : Int = 0,
+  recoil_den~ : Int = 1,
+  self_ko~ : Bool = false,
+  recharge~ : Bool = false,
 ) -> @model.Move {
   {
     name,
     type_,
     category,
     power,
-    accuracy: 100,
+    accuracy,
     pp: 10,
     learn_method: "",
     priority,
     stat_effects,
+    status_effect,
+    recoil_num,
+    recoil_den,
+    self_ko,
+    recharge,
   }
 }
 

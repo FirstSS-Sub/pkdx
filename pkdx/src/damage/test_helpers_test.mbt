@@ -87,6 +87,11 @@ fn mk_move(
     learn_method: "",
     priority: 0,
     stat_effects: [],
+    status_effect: None,
+    recoil_num: 0,
+    recoil_den: 1,
+    self_ko: false,
+    recharge: false,
   }
 }
 
