@@ -8,3 +8,6 @@ box/cache/damage_cache.sqlite-shm
 
 # version管理対象外のスキル出力
 box/**/__no_save.*
+
+# blog スキル等の編集前バックアップ
+box/**/*.bak
